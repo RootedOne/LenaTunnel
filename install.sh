@@ -326,13 +326,13 @@ if [[ "$role_choice" == "1" ]]; then
     iptables -I INPUT 1 -s $REMOTE_IP -j ACCEPT
     iptables -I INPUT 1 -s ${VXLAN_IP%/*} -j ACCEPT
 elif [[ "$role_choice" == "2" ]]; then
-    ip link add $VXLAN_IF type vxlan id $VNI local $KHAREJ_IP remote 0.0.0.0 dev $INTERFACE dstport $DSTPORT nolearning
+    ip link add $VXLAN_IF type vxlan id $VNI local $KHAREJ_IP dev $INTERFACE dstport $DSTPORT nolearning
     ip addr add $VXLAN_IP dev $VXLAN_IF
     ip link set $VXLAN_IF up
     for i in "${!REMOTE_IP_LIST[@]}"; do
         IRAN_IP=${REMOTE_IP_LIST[$i]}
         REMOTE_VXLAN_IP="30.0.0.$((i + 2))"
-        ip route add $REMOTE_VXLAN_IP/32 dev $VXLAN_IF
+        bridge fdb append to 00:00:00:00:00:00 dst $IRAN_IP dev $VXLAN_IF
     done
 fi
 
@@ -351,15 +351,14 @@ EOF
 elif [[ "$role_choice" == "2" ]]; then
     cat <<EOF > /usr/local/bin/vxlan_bridge.sh
 #!/bin/bash
-ip link add $VXLAN_IF type vxlan id $VNI local $KHAREJ_IP remote 0.0.0.0 dev $INTERFACE dstport $DSTPORT nolearning
+ip link add $VXLAN_IF type vxlan id $VNI local $KHAREJ_IP dev $INTERFACE dstport $DSTPORT nolearning
 ip addr add $VXLAN_IP dev $VXLAN_IF
 ip link set $VXLAN_IF up
 EOF
     for i in "${!REMOTE_IP_LIST[@]}"; do
         IRAN_IP=${REMOTE_IP_LIST[$i]}
-        REMOTE_VXLAN_IP="30.0.0.$((i + 2))"
         cat <<EOF >> /usr/local/bin/vxlan_bridge.sh
-ip route add $REMOTE_VXLAN_IP/32 dev $VXLAN_IF
+bridge fdb append to 00:00:00:00:00:00 dst $IRAN_IP dev $VXLAN_IF
 ( while true; do ping -c 1 $IRAN_IP >/dev/null 2>&1; sleep 30; done ) &
 EOF
     done
