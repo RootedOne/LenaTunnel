@@ -261,13 +261,29 @@ if [[ "$role_choice" == "1" ]]; then
     else
         ipv4_local=$(hostname -I | awk '{print $1}')
         echo "IRAN Server setup complete."
-        echo -e "####################################"
-        echo -e "# Your IPv4 :                      #"
-        echo -e "#  30.0.0.1                     #"
-        echo -e "####################################"
     fi
 
-    VXLAN_IP="30.0.0.1/24"
+    # Strict input validation for VXLAN IP
+    while true; do
+        read -p "Enter the last octet for the local VXLAN IP (e.g., for 30.0.0.X, enter X): " last_octet
+        if [[ "$last_octet" =~ ^[0-9]+$ ]] && [ "$last_octet" -ge 1 ] && [ "$last_octet" -le 254 ]; then
+            break
+        else
+            echo "Please enter a number between 1 and 254."
+        fi
+    done
+
+    while true; do
+        read -p "Enter the last octet for the remote VXLAN IP (e.g., for 30.0.0.X, enter X): " remote_last_octet
+        if [[ "$remote_last_octet" =~ ^[0-9]+$ ]] && [ "$remote_last_octet" -ge 1 ] && [ "$remote_last_octet" -le 254 ]; then
+            break
+        else
+            echo "Please enter a number between 1 and 254."
+        fi
+    done
+
+    VXLAN_IP="30.0.0.$last_octet/24"
+    REMOTE_VXLAN_IP="30.0.0.$remote_last_octet"
     REMOTE_IP=$KHAREJ_IP
 
 elif [[ "$role_choice" == "2" ]]; then
@@ -284,16 +300,34 @@ elif [[ "$role_choice" == "2" ]]; then
         fi
     done
 
-    ipv4_local=$(hostname -I | awk '{print $1}')
+    # Strict input validation for VXLAN IP
+    while true; do
+        read -p "Enter the last octet for the local VXLAN IP (e.g., for 30.0.0.X, enter X): " last_octet
+        if [[ "$last_octet" =~ ^[0-9]+$ ]] && [ "$last_octet" -ge 1 ] && [ "$last_octet" -le 254 ]; then
+            break
+        else
+            echo "Please enter a number between 1 and 254."
+        fi
+    done
+
+    while true; do
+        read -p "Enter the last octet for the remote VXLAN IP (e.g., for 30.0.0.X, enter X): " remote_last_octet
+        if [[ "$remote_last_octet" =~ ^[0-9]+$ ]] && [ "$remote_last_octet" -ge 1 ] && [ "$remote_last_octet" -le 254 ]; then
+            break
+        else
+            echo "Please enter a number between 1 and 254."
+        fi
+    done
+
+    VXLAN_IP="30.0.0.$last_octet/24"
+    REMOTE_VXLAN_IP="30.0.0.$remote_last_octet"
+    REMOTE_IP=$IRAN_IP
+
     echo "Kharej Server setup complete."
     echo -e "####################################"
     echo -e "# Your IPv4 :                      #"
-    echo -e "#  30.0.0.2                        #"
+    echo -e "#  ${VXLAN_IP%/*}                        #"
     echo -e "####################################"
-
-    VXLAN_IP="30.0.0.2/24"
-    REMOTE_IP=$IRAN_IP
-
 else
     echo "[x] Invalid role selected."
     exit 1
@@ -325,7 +359,7 @@ ip link add $VXLAN_IF type vxlan id $VNI local $(hostname -I | awk '{print $1}')
 ip addr add $VXLAN_IP dev $VXLAN_IF
 ip link set $VXLAN_IF up
 # Persistent keepalive: ping remote every 30s in background
-( while true; do ping -c 1 $REMOTE_IP >/dev/null 2>&1; sleep 30; done ) &
+( while true; do ping -c 1 $REMOTE_VXLAN_IP >/dev/null 2>&1; sleep 30; done ) &
 EOF
 
 chmod +x /usr/local/bin/vxlan_bridge.sh
