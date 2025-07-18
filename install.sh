@@ -242,6 +242,7 @@ if [[ "$role_choice" == "1" ]]; then
     read -p "Enter IRAN IP: " IRAN_IP
     read -p "Enter Kharej IP: " KHAREJ_IP
     read -p "Enter a unique IP for this Iran server in the 30.0.0.0/24 range (e.g., 30.0.0.2): " VXLAN_IP
+    read -p "Enter the Kharej server's VXLAN IP address (e.g., 30.0.0.1): " KHAREJ_VXLAN_IP
 
     # Port validation loop
     while true; do
@@ -298,9 +299,12 @@ elif [[ "$role_choice" == "2" ]]; then
 
     VXLAN_IP="30.0.0.1/24"
     REMOTE_IP_LIST=()
+    REMOTE_VXLAN_IP_LIST=()
     for ((i=1; i<=num_iran_servers; i++)); do
         read -p "Enter IRAN IP for server $i: " IRAN_IP
+        read -p "Enter the VXLAN IP for the Iran server $i: " REMOTE_VXLAN_IP
         REMOTE_IP_LIST+=($IRAN_IP)
+        REMOTE_VXLAN_IP_LIST+=($REMOTE_VXLAN_IP)
     done
 
 else
@@ -331,8 +335,9 @@ elif [[ "$role_choice" == "2" ]]; then
     ip link set $VXLAN_IF up
     for i in "${!REMOTE_IP_LIST[@]}"; do
         IRAN_IP=${REMOTE_IP_LIST[$i]}
-        REMOTE_VXLAN_IP="30.0.0.$((i + 2))"
+        REMOTE_VXLAN_IP=${REMOTE_VXLAN_IP_LIST[$i]}
         bridge fdb append to 00:00:00:00:00:00 dst $IRAN_IP dev $VXLAN_IF
+        ip route add $REMOTE_VXLAN_IP/32 dev $VXLAN_IF
     done
 fi
 
@@ -357,8 +362,10 @@ ip link set $VXLAN_IF up
 EOF
     for i in "${!REMOTE_IP_LIST[@]}"; do
         IRAN_IP=${REMOTE_IP_LIST[$i]}
+        REMOTE_VXLAN_IP=${REMOTE_VXLAN_IP_LIST[$i]}
         cat <<EOF >> /usr/local/bin/vxlan_bridge.sh
 bridge fdb append to 00:00:00:00:00:00 dst $IRAN_IP dev $VXLAN_IF
+ip route add $REMOTE_VXLAN_IP/32 dev $VXLAN_IF
 ( while true; do ping -c 1 $IRAN_IP >/dev/null 2>&1; sleep 30; done ) &
 EOF
     done
