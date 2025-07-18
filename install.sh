@@ -147,10 +147,9 @@ defaults
 EOL
 
     read -p "Enter ports (comma-separated): " user_ports
-    read -p "Enter the backend IP addresses (comma-separated): " backend_ips
+    local local_ip=$(hostname -I | awk '{print $1}')
 
     IFS=',' read -ra ports <<< "$user_ports"
-    IFS=',' read -ra ips <<< "$backend_ips"
 
     for port in "${ports[@]}"; do
         cat <<EOL >> "$CONFIG_FILE"
@@ -162,12 +161,8 @@ frontend frontend_$port
 
 backend backend_$port
     option tcpka
+    server server1 $local_ip:$port check maxconn 2048
 EOL
-        for i in "${!ips[@]}"; do
-            cat <<EOL >> "$CONFIG_FILE"
-    server server$i ${ips[$i]}:$port check maxconn 2048
-EOL
-        done
     done
 
     # Validate haproxy config
@@ -239,20 +234,10 @@ echo "2- Kharej"
 read -p "Enter choice (1/2): " role_choice
 
 if [[ "$role_choice" == "1" ]]; then
-    read -p "Enter IRAN IP: " IRAN_IP
-    read -p "Enter Kharej IP: " KHAREJ_IP
-    read -p "Enter a unique IP for this Iran server in the 30.0.0.0/24 range (e.g., 30.0.0.2): " VXLAN_IP
-    read -p "Enter the Kharej server's VXLAN IP address (e.g., 30.0.0.1): " KHAREJ_VXLAN_IP
-
-    # Port validation loop
-    while true; do
-        read -p "Tunnel port (1 ~ 64435): " DSTPORT
-        if [[ $DSTPORT =~ ^[0-9]+$ ]] && (( DSTPORT >= 1 && DSTPORT <= 64435 )); then
-            break
-        else
-            echo "Invalid port. Try again."
-        fi
-    done
+    read -p "Enter a unique name for the VXLAN interface (e.g., vxlan10): " VXLAN_IF
+    read -p "Enter a unique private IP for this server (e.g., 30.0.0.2/24): " VXLAN_IP
+    read -p "Enter the public IP of the Kharej server: " KHAREJ_IP
+    read -p "Enter the tunnel port: " DSTPORT
 
     # Strict input validation for haproxy_choice
     while true; do
@@ -278,32 +263,17 @@ if [[ "$role_choice" == "1" ]]; then
 
 elif [[ "$role_choice" == "2" ]]; then
     read -p "Enter the number of Iran servers to connect: " num_iran_servers
-    read -p "Enter Kharej IP: " KHAREJ_IP
+    read -p "Enter a unique private IP for this server (e.g., 30.0.0.1/24): " VXLAN_IP
 
-    # Port validation loop
-    while true; do
-        read -p "Tunnel port (1 ~ 64435): " DSTPORT
-        if [[ $DSTPORT =~ ^[0-9]+$ ]] && (( DSTPORT >= 1 && DSTPORT <= 64435 )); then
-            break
-        else
-            echo "Invalid port. Try again."
-        fi
-    done
-
-    ipv4_local=$(hostname -I | awk '{print $1}')
-    echo "Kharej Server setup complete."
-    echo -e "####################################"
-    echo -e "# Your IPv4 :                      #"
-    echo -e "#  30.0.0.1                        #"
-    echo -e "####################################"
-
-    VXLAN_IP="30.0.0.1/24"
     REMOTE_IP_LIST=()
+    REMOTE_VXLAN_IF_LIST=()
     REMOTE_VXLAN_IP_LIST=()
     for ((i=1; i<=num_iran_servers; i++)); do
-        read -p "Enter IRAN IP for server $i: " IRAN_IP
-        read -p "Enter the VXLAN IP for the Iran server $i: " REMOTE_VXLAN_IP
+        read -p "Enter the public IP for Iran server $i: " IRAN_IP
+        read -p "Enter the VXLAN interface name for Iran server $i: " REMOTE_VXLAN_IF
+        read -p "Enter the private IP for Iran server $i: " REMOTE_VXLAN_IP
         REMOTE_IP_LIST+=($IRAN_IP)
+        REMOTE_VXLAN_IF_LIST+=($REMOTE_VXLAN_IF)
         REMOTE_VXLAN_IP_LIST+=($REMOTE_VXLAN_IP)
     done
 
@@ -319,7 +289,7 @@ echo "Detected main interface: $INTERFACE"
 # ------------ Setup VXLAN --------------
 if [[ "$role_choice" == "1" ]]; then
     echo "[+] Creating VXLAN interface..."
-    ip link add $VXLAN_IF type vxlan id $VNI local $(hostname -I | awk '{print $1}') remote $REMOTE_IP dev $INTERFACE dstport $DSTPORT nolearning
+    ip link add $VXLAN_IF type vxlan id $VNI local $(hostname -I | awk '{print $1}') remote $REMOTE_IP dev $(ip route get 1.1.1.1 | awk '{print $5}' | head -n1) dstport $DSTPORT nolearning
 
     echo "[+] Assigning IP $VXLAN_IP to $VXLAN_IF"
     ip addr add $VXLAN_IP dev $VXLAN_IF
@@ -330,14 +300,19 @@ if [[ "$role_choice" == "1" ]]; then
     iptables -I INPUT 1 -s $REMOTE_IP -j ACCEPT
     iptables -I INPUT 1 -s ${VXLAN_IP%/*} -j ACCEPT
 elif [[ "$role_choice" == "2" ]]; then
-    ip link add $VXLAN_IF type vxlan id $VNI local $KHAREJ_IP dev $INTERFACE dstport $DSTPORT nolearning
-    ip addr add $VXLAN_IP dev $VXLAN_IF
-    ip link set $VXLAN_IF up
     for i in "${!REMOTE_IP_LIST[@]}"; do
         IRAN_IP=${REMOTE_IP_LIST[$i]}
+        REMOTE_VXLAN_IF=${REMOTE_VXLAN_IF_LIST[$i]}
         REMOTE_VXLAN_IP=${REMOTE_VXLAN_IP_LIST[$i]}
-        bridge fdb append to 00:00:00:00:00:00 dst $IRAN_IP dev $VXLAN_IF
-        ip route add $REMOTE_VXLAN_IP/32 dev $VXLAN_IF
+
+        echo "[+] Creating VXLAN interface $REMOTE_VXLAN_IF for $IRAN_IP..."
+        ip link add $REMOTE_VXLAN_IF type vxlan id $((VNI + i)) local $(hostname -I | awk '{print $1}') remote $IRAN_IP dev $(ip route get 1.1.1.1 | awk '{print $5}' | head -n1) dstport $DSTPORT nolearning
+        ip addr add $VXLAN_IP dev $REMOTE_VXLAN_IF
+        ip link set $REMOTE_VXLAN_IF up
+
+        echo "[+] Adding iptables rules for $IRAN_IP"
+        iptables -I INPUT 1 -p udp --dport $DSTPORT -j ACCEPT
+        iptables -I INPUT 1 -s $IRAN_IP -j ACCEPT
     done
 fi
 
@@ -347,7 +322,7 @@ echo "[+] Creating systemd service for VXLAN..."
 if [[ "$role_choice" == "1" ]]; then
     cat <<EOF > /usr/local/bin/vxlan_bridge.sh
 #!/bin/bash
-ip link add $VXLAN_IF type vxlan id $VNI local $(hostname -I | awk '{print $1}') remote $REMOTE_IP dev $INTERFACE dstport $DSTPORT nolearning
+ip link add $VXLAN_IF type vxlan id $VNI local $(hostname -I | awk '{print $1}') remote $REMOTE_IP dev $(ip route get 1.1.1.1 | awk '{print $5}' | head -n1) dstport $DSTPORT nolearning
 ip addr add $VXLAN_IP dev $VXLAN_IF
 ip link set $VXLAN_IF up
 # Persistent keepalive: ping remote every 30s in background
@@ -356,17 +331,16 @@ EOF
 elif [[ "$role_choice" == "2" ]]; then
     cat <<EOF > /usr/local/bin/vxlan_bridge.sh
 #!/bin/bash
-ip link add $VXLAN_IF type vxlan id $VNI local $KHAREJ_IP dev $INTERFACE dstport $DSTPORT nolearning
-ip addr add $VXLAN_IP dev $VXLAN_IF
-ip link set $VXLAN_IF up
 EOF
     for i in "${!REMOTE_IP_LIST[@]}"; do
         IRAN_IP=${REMOTE_IP_LIST[$i]}
+        REMOTE_VXLAN_IF=${REMOTE_VXLAN_IF_LIST[$i]}
         REMOTE_VXLAN_IP=${REMOTE_VXLAN_IP_LIST[$i]}
         cat <<EOF >> /usr/local/bin/vxlan_bridge.sh
-bridge fdb append to 00:00:00:00:00:00 dst $IRAN_IP dev $VXLAN_IF
-ip route add $REMOTE_VXLAN_IP/32 dev $VXLAN_IF
-( while true; do ping -c 1 $IRAN_IP >/dev/null 2>&1; sleep 30; done ) &
+ip link add $REMOTE_VXLAN_IF type vxlan id $((VNI + i)) local $(hostname -I | awk '{print $1}') remote $IRAN_IP dev $(ip route get 1.1.1.1 | awk '{print $5}' | head -n1) dstport $DSTPORT nolearning
+ip addr add $VXLAN_IP dev $REMOTE_VXLAN_IF
+ip link set $REMOTE_VXLAN_IF up
+( while true; do ping -c 1 $REMOTE_VXLAN_IP >/dev/null 2>&1; sleep 30; done ) &
 EOF
     done
 fi
